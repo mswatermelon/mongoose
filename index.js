@@ -1,157 +1,225 @@
-var mongoose = require('mongoose');
-var schema = require('./schema');
-var mongodb = require('mongodb');
-var MongoClient = mongodb.MongoClient;
-var User = schema.User;
-var Task = schema.Task;
-var url = 'mongodb://localhost/tasks';
+const workWithDB = require('./utility');
+const express = require("express");
+const bodyParser = require('body-parser');
+const app = express();
+const rtAPI = express.Router();
+const rpcAPI = express.Router();
 
-mongoose.connect(url);
+class User {
+  constructor (id, name, score){
+    this.id = id;
+    this.name = name;
+    this.score = score;
+  }
+  toString(){
+    return {
+      id: this.id,
+      name: this.name,
+      score: this.score
+    };
+  }
+}
 
-var createUser = function (name, pass) {
-  if (!name) console.log('У пользователя должно быть уникальное имя');
-  var params = {};
+class Users extends Array {
+  constructor(...users){
+    super(...users);
+  }
+  findByParam(param, val){
+    let fItem, fIndex;
 
-  if (name) params.name = name;
-  if (pass) params.pass = pass;
-
-  var user = new User(params);
-  user.save(function(err) {
-    if (err) console.log('Ошибка при сохранения');
-  });
-};
-
-var editUser = function (name, newParams) {
-  User.findOne({name: name}, function(err, user){
-    if (err) console.log('Пользователь не найден');
-    if (newParams.name) user.name = newParams.name;
-    if (newParams.password) user.password = newParams.password;
-    user.save(function(err) {
-      if (err) console.log('Ошибка при сохранения');
+    this.forEach(function(item, index){
+      if (item[param] == val) {
+        fItem = item;
+        fIndex = index;
+      }
     });
-  })
+
+    if(arguments.length == 3) return fIndex;
+    return fItem;
+  }
+}
+
+let users = new Users();
+users.push(new User(1, 'User1', 15));
+users.push(new User(2, 'User2', 40));
+users.push(new User(3, 'User3', 23));
+
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({"extended": true}));
+
+let setLimit = (arr, offset, limit) => {
+  return arr.slice(
+    offset,
+    offset + limit
+  );
 };
 
-var deleteUser = function (name) {
-  User.remove({name: name}, function(err){
-    if (err) console.log('Ошибка при удалении пользователя');
-  })
-};
+let setFields = (arr, fields) => {
+  let newArr = new Users();
 
-var createTask = function (title, description, date, status) {
-  if (!title) console.log('У задачи должен быть заголовок');
-  var params = {};
+  arr.forEach((item) => {
+    let newItem = {};
 
-  if (title) params.title = title;
-  if (description) params.description = description;
-  if (date) params.date = date;
-  if (status) params.status = status;
-
-  var task = new Task(params);
-
-  task.save(function(err) {
-    if (err) console.log('Ошибка при сохранения');
-  });
-};
-
-var editTask = function (title, newParams) {
-  Task.findOne({title: title}, function(err, task){
-    if (err) console.log('Задача не найдена');
-    if (newParams.title) task.title = newParams.title;
-    if (newParams.description) task.description = newParams.description;
-    if (newParams.date) task.date = newParams.date;
-    if (newParams.status) task.status = newParams.status;
-    task.save(function(err) {
-      if (err) console.log('Ошибка при сохранения');
-    });
-  })
-};
-
-var deleteTask = function (title) {
-  Task.remove({title: title}, function(err){
-    if (err) console.log('Ошибка при удалении задачи');
-  })
-};
-
-var changeTaskStatus = function (title, status) {
-  Task.findOne({title: title}, function(err, task){
-    if (err) console.log('Задача не найдена');
-
-    if (status) task.open = status;
-
-    task.save(function(err) {
-      if (err) console.log('Ошибка при сохранения');
-    });
-  })
-};
-
-var setTaskToUser = function (name, title) {
-  User.findOne({name: name}, function(err, user){
-    if (err) console.log('Пользователь не найден');
-    console.log(user.tasks);
-    Task.findOne({title: title}, function(err, task){
-      user.tasks.push(task);
-      user.save(function(err) {
-        if (err) console.log('Ошибка при сохранения', err);
-      });
-    });
-  });
-};
-
-var findTask = function(someStr, callback) {
-  MongoClient.connect(url, (err, db) => {
-    if(err) console.log('Невозможно подключиться к базе:', err);
-    else {
-      let tasks = db.collection('tasks');
-      tasks.aggregate([
-        {$match: {$or: [
-          {title: new RegExp(someStr)},
-          {description: new RegExp(someStr)}
-        ]}}
-      ]).toArray(function(err, result) {
-       if(err) console.log('При поиске произошла ошибка:', err);
-       console.log(result);
-       if (callback) callback(result);
-     });
+    for (let param of fields){
+      newItem[param] = item[param];
     }
+
+    newArr.push(newItem);
   });
+
+  return newArr;
 };
 
-var getReport = function(callback) {
-  MongoClient.connect(url, (err, db) => {
-    if(err) console.log('Невозможно подключиться к базе:', err);
-    else {
-      let users = db.collection('users');
-      users.aggregate([
-        {$match: {"tasks.open": false}},
-        {
-         $project: {
-            name: 1,
-            tasks: {
-              $filter:{
-                input: "$tasks",
-                as: "task",
-                cond: { $eq: [ "$$task.open", false ] }
-              }
-            }
-         }
-        },
-        {
-         $project: {
-            name: 1,
-            cnt: {$size : "$tasks"}//: { $eq: [ "$tasks.open", false ] }}}
-         }
-        },
-        {$sort: {cnt: -1}}
-      ]).toArray(function(err, result) {
-       if(err) console.log('При поиске произошла ошибка:', err);
-       for(var i=0;i<result.length;i++){
-         console.log(result[i].name, result[i].cnt);
-       }
-       if (callback) callback(result);
-     });
+rtAPI.get("/users", function(req, res) {
+  let callback = function(err, users){
+    if (err) res.send(401, "Users not found");
+    let newUsers = users;
+
+    if('limit' in req.query && 'offset' in req.query){
+      newUsers = setLimit(newUsers, parseInt(req.query.offset), parseInt(req.query.limit));
     }
-  });
-};
+    if('fields' in req.query){
+      let fields = req.query.fields.split(',');
+      newUsers = setFields(newUsers, fields);
+    }
 
-getReport();
+    res.json(newUsers);
+  };
+  workWithDB.getUsers(callback);
+});
+
+rtAPI.post("/users", function(req, res) {
+  let name = req.body.name,
+      pass = req.body.pass;
+
+  if (!name) res.send(401, "User must have unique name");
+
+  let callback = function(err, user){
+    if (err) res.send(500, "User not created");
+      res.json({name: user.name});
+  }
+
+  workWithDB.createUser(name, pass, callback);
+});
+
+rtAPI.put("/users/:name", function(req, res) {
+  let name = req.body.name,
+      pass = req.body.pass,
+      params = {
+        name: name,
+        pass: pass
+      };
+
+  let callback = function(err, user){
+    if (err) res.send(500, "User not modified");
+    res.json({name: user.name});
+  }
+
+  workWithDB.editUser(name, params, callback);
+});
+
+rtAPI.delete("/users/:name", function(req, res) {
+  let name = req.params.name;
+
+  let callback = function(err){
+    if (err) res.send(401, "User not found");
+    res.send(200, "User deleted");
+  }
+
+  workWithDB.deleteUser(name, callback);
+});
+
+rtAPI.put("/users/:name/:title", function(req, res) {
+  let name = req.params.name,
+      title = req.params.title;
+
+  let callback = function(err){
+    if (err) res.send(500, err);
+    else res.send(200, "Save task for user");
+  }
+
+  workWithDB.setTaskToUser(name, title, callback);
+});
+
+rtAPI.get("/tasks", function(req, res) {
+  let callback = function(err, tasks){
+    if (err) res.send(401, "Tasks not found");
+    let newTasks = tasks;
+
+    if('limit' in req.query && 'offset' in req.query){
+      newTasks = setLimit(newTasks, parseInt(req.query.offset), parseInt(req.query.limit));
+    }
+    if('fields' in req.query){
+      let fields = req.query.fields.split(',');
+      newTasks = setFields(newTasks, fields);
+    }
+
+    res.json(newTasks);
+  };
+
+  workWithDB.getTasks(callback);
+});
+
+rtAPI.get("/tasks/:string", function(req, res) {
+  let string = req.params.string;
+
+  let callback = function(err, task){
+    if (err) res.send(401, "Task not found");
+
+    res.json(task);
+  };
+
+  workWithDB.findTask(string, callback);
+});
+
+rtAPI.post("/tasks", function(req, res) {
+  let title = req.body.title,
+      description = req.body.description,
+      date = req.body.date,
+      open = req.body.open;
+
+  if (!title) res.send(401, "Task must have unique title");
+
+  let callback = function(err, task){
+    if (err) res.send(500, "Task not created");
+    res.json({title: task.title});
+  }
+
+  workWithDB.createTask(title, description, date, open, callback);
+});
+
+rtAPI.put("/tasks/:title", function(req, res) {
+  let title = req.body.title;
+
+  if (!title) res.send(401, "Task must have unique title");
+
+  let callback = function(err, task){
+    if (err) res.send(500, "Task not modified");
+    res.json({title: task.title});
+  }
+  if (!('description' in req.body) || !('date' in req.body))
+    workWithDB.changeTaskStatus(title, req.body.open, callback);
+  else workWithDB.editTask(title, req.body, callback);
+});
+
+rtAPI.delete("/tasks/:title", function(req, res) {
+  let title = req.params.title;
+
+  let callback = function(err){
+    if (err) res.send(401, "Task not found");
+    res.send(200, "Task deleted");
+  }
+
+  workWithDB.deleteTask(title, callback);
+});
+
+rtAPI.get("/report", function(req, res) {
+  let callback = function(err, result){
+    if (err) res.send(500, "Error");
+    res.json(result);
+  };
+  workWithDB.getReport(callback);
+});
+
+app.use("/api/rt", rtAPI);
+app.listen(1337);
